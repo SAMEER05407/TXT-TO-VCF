@@ -55,30 +55,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(user_id):
         await update.message.reply_text("⛔ Access Denied! Contact admin.")
         return
-    await update.message.reply_text("✨ Welcome to ContactX Bot – Your Ultimate Contact Converter!
-Created by Sameer | Secure. Fast. Powerful.
-
-⚡ What I Do:
-Turn boring .txt files into clean, ready-to-import .vcf files — in seconds!
-
-How to Use Me:
-
-1. 📤 Upload your .txt file with numbers
-
-2. ✍️ Enter the base name (e.g., Twitter2025)
-
-3. 🔢 Choose how many contacts per VCF
-
-4. ✅ Boom! Get your downloadable .vcf files
-
-
-⭐ Features You’ll Love:
-• Supports all country numbers (Not just 10-digit)
-• Splits large files automatically
-• Instant & accurate conversion
-• Admin-only access control for privacy
-• Clean & simple UI for ease of use
-")
+    await update.message.reply_text("✨ Welcome to ContactX Bot Your Ultimate Contact Converter
+Created by Sameer")
 
 # === File Upload ===
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
