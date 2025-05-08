@@ -139,14 +139,21 @@ def process_file(update: Update, context: CallbackContext):
     try:
         contacts_per_file = int(update.message.text)
         if contacts_per_file <= 0:
-            raise ValueError
+            raise ValueError("Contacts per file must be greater than 0")
 
+        last_percent = -1
         msg = update.message.reply_text("⚙️ Processing... 0%")
+
+        # Check if temp file exists
+        if 'temp_file' not in context.user_data:
+            update.message.reply_text("❌ Temp file not found!")
+            return ConversationHandler.END
 
         with open(context.user_data['temp_file'].name, 'r') as f:
             numbers = [re.sub(r'\D', '', line.strip()) for line in f if line.strip()]
+
         if not numbers:
-            msg.edit_text("❌ No valid numbers found!")
+            msg.edit_text("❌ No valid numbers found in file.")
             return ConversationHandler.END
 
         base_prefix, start_num = extract_base_and_number(context.user_data['base_name'])
@@ -154,32 +161,48 @@ def process_file(update: Update, context: CallbackContext):
 
         for i in range(0, len(numbers), contacts_per_file):
             batch = numbers[i:i + contacts_per_file]
-            percent = int((i + len(batch)) / len(numbers) * 100)
-
-            msg.edit_text(f"⚙️ Processing... {percent}%")
+            current_percent = min(100, int((i + len(batch)) / len(numbers) * 100))
+            
+            if current_percent != last_percent:
+                try:
+                    msg.edit_text(f"⚙️ Processing... {current_percent}%")
+                    last_percent = current_percent
+                except:
+                    pass
 
             with tempfile.NamedTemporaryFile(delete=False, suffix='.vcf') as vcf_file:
                 for j, num in enumerate(batch):
                     contact_num = start_num + i + j
                     vcf_file.write(
-                        f"BEGIN:VCARD\nVERSION:3.0\nFN:{base_prefix}{contact_num}\nTEL:{num}\nEND:VCARD\n".encode()
+                        f"BEGIN:VCARD\n"
+                        f"VERSION:3.0\n"
+                        f"FN:{base_prefix}{contact_num}\n"
+                        f"TEL:{num}\n"
+                        f"END:VCARD\n".encode()
                     )
                 vcf_file.flush()
+                
                 with open(vcf_file.name, 'rb') as f:
                     update.message.reply_document(
                         document=f,
                         filename=f"{file_prefix}{file_start_num + (i//contacts_per_file)}.vcf",
-                        caption=f"✅ {len(batch)} contacts ({base_prefix}{start_num + i}-{base_prefix}{start_num + i + len(batch) - 1})"
+                        caption=f"✅ {len(batch)} contacts"
                     )
             os.unlink(vcf_file.name)
 
         msg.edit_text(f"🎉 Converted {len(numbers)} contacts!")
-    except:
-        update.message.reply_text("❌ Error processing file.")
+
+    except ValueError as ve:
+        update.message.reply_text(f"❌ Value Error: {str(ve)}")
+    except Exception as e:
+        update.message.reply_text(f"❌ Error processing file: {str(e)}")
     finally:
         if 'temp_file' in context.user_data:
-            os.unlink(context.user_data['temp_file'].name)
-    return ConversationHandler.END
+            try:
+                os.unlink(context.user_data['temp_file'].name)
+            except:
+                pass
+        return ConversationHandler.END
 
 def main():
     keep_alive()
