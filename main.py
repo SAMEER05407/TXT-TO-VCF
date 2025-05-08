@@ -56,7 +56,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(user_id):
         await update.message.reply_text("⛔ Access Denied! Contact admin.")
         return
-    await update.message.reply_text("Welcome! Send a .txt file to start converting.")
+    await update.message.reply_text("✨ Welcome to ContactX Bot – Your Ultimate Contact Converter!
+Created by Sameer | Secure. Fast. Powerful.
+
+⚡ What I Do:
+Turn boring .txt files into clean, ready-to-import .vcf files — in seconds!
+
+How to Use Me:
+
+1. 📤 Upload your .txt file with numbers
+
+2. ✍️ Enter the base name (e.g., Twitter2025)
+
+3. 🔢 Choose how many contacts per VCF
+
+4. ✅ Boom! Get your downloadable .vcf files
+
+
+⭐ Features You’ll Love:
+• Supports all country numbers (Not just 10-digit)
+• Splits large files automatically
+• Instant & accurate conversion
+• Admin-only access control for privacy
+• Clean & simple UI for ease of use
+")
 
 # === File Upload ===
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -73,17 +96,17 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_path = tempfile.NamedTemporaryFile(delete=False, suffix=".txt").name
     await file.get_file().download_to_drive(file_path)
     context.user_data["temp_file"] = file_path
-    await update.message.reply_text("🔤 Enter Base Name (e.g., twitter11):")
+    await update.message.reply_text("ENTER THE BASE NAME 📱 (e.g., twitter11):")
     return GET_BASE_NAME
 
 async def get_base_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["base_name"] = update.message.text.strip()
-    await update.message.reply_text("📝 Enter File Prefix (e.g., batch1):")
+    await update.message.reply_text("ENTER THE BASE FILE NAME 🗃️ (e.g., batch1):")
     return GET_FILE_NAME
 
 async def get_file_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["file_name"] = update.message.text.strip()
-    await update.message.reply_text("🔢 Contacts per file (e.g., 50):")
+    await update.message.reply_text("CONTECT IN PER FILE ♂️ (e.g., 50):")
     return GET_CONTACTS_PER_FILE
 
 def extract_base_and_number(name):
