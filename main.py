@@ -4,7 +4,8 @@ import tempfile
 import time
 from flask import Flask
 from threading import Thread
-from telegram import Update, InputFile, ChatAction
+
+from telegram import Update, InputFile
 from telegram.ext import (
     Updater,
     CommandHandler,
@@ -32,7 +33,14 @@ TOKEN = "7210389776:AAEWbAsgCtWQ9GOPKqAhIo7HvzRYajPCqyg"
 ADMIN_ID = 1485166650
 ALLOWED_USERS = {ADMIN_ID}
 
-GET_BASE_NAME, GET_FILE_NAME, GET_CONTACTS_PER_FILE = range(3)
+if not re.match(r'^\d+:[\w-]+$', TOKEN):
+    raise ValueError("Invalid bot token! Get new one from @BotFather")
+if not isinstance(ADMIN_ID, int) or ADMIN_ID < 1:
+    raise ValueError("Invalid ADMIN_ID! Get your ID from @userinfobot")
+
+GET_BASE_NAME, GET_FILE_NAME, GET_CONTACTS_PER_FILE, GET_NUMBERS = range(4)
+
+user_states = {}
 
 def send_typing(action, update, context):
     context.bot.send_chat_action(chat_id=update.effective_chat.id, action=action)
@@ -47,61 +55,73 @@ def is_allowed(user_id):
 
 def start(update: Update, context: CallbackContext):
     if not is_allowed(update.effective_user.id):
-        send_typing(ChatAction.TYPING, update, context)
+        send_typing("typing", update, context)
         update.message.reply_text("⛔ Access Denied! Contact admin")
         return
 
-    send_typing(ChatAction.TYPING, update, context)
+    send_typing("typing", update, context)
     update.message.reply_text(
         "✨ *Ultimate TXT-to-VCF Converter* ✨\n\n"
         "📁 Send your TXT file to begin\n"
-        "✍️ Then enter: Base Name → Base File Name → Contacts per file\n\n"
-        "⚡ Auto numbering like: Twitter11 → Twitter12\n"
-        "\n*Manual Entry Supported!*",
+        "✏️ Or use /manual to paste numbers\n"
+        "⚡ Auto numbering: C1→C2, twitter11→twitter12",
         parse_mode="Markdown"
     )
 
 def handle_file(update: Update, context: CallbackContext):
     if not is_allowed(update.effective_user.id):
-        send_typing(ChatAction.TYPING, update, context)
+        send_typing("typing", update, context)
         update.message.reply_text("🔒 Unauthorized!")
         return
 
     file = update.message.document
     if not file.file_name.lower().endswith('.txt'):
-        send_typing(ChatAction.TYPING, update, context)
+        send_typing("typing", update, context)
         update.message.reply_text("❌ Only TXT files accepted")
         return
 
     context.user_data['temp_file'] = tempfile.NamedTemporaryFile(delete=False, suffix='.txt')
     file.get_file().download(context.user_data['temp_file'].name)
 
-    send_typing(ChatAction.TYPING, update, context)
-    update.message.reply_text("🔤 Enter Base Name (e.g., Twitter11):")
+    send_typing("typing", update, context)
+    update.message.reply_text("ENTER BASE NAME:")
+    return GET_BASE_NAME
+
+def manual(update: Update, context: CallbackContext):
+    if not is_allowed(update.effective_user.id):
+        update.message.reply_text("🔒 Unauthorized!")
+        return
+    context.user_data['manual'] = True
+    update.message.reply_text("ENTER BASE NAME:")
     return GET_BASE_NAME
 
 def get_base_name(update: Update, context: CallbackContext):
     context.user_data['base_name'] = update.message.text
-    send_typing(ChatAction.TYPING, update, context)
     update.message.reply_text("ENTER BASE FILE NAME:")
     return GET_FILE_NAME
 
 def get_file_name(update: Update, context: CallbackContext):
     context.user_data['file_name'] = update.message.text
-    send_typing(ChatAction.TYPING, update, context)
     update.message.reply_text("🔢 Contacts per File (e.g., 50):")
     return GET_CONTACTS_PER_FILE
 
+def get_manual_numbers(update: Update, context: CallbackContext):
+    context.user_data['manual_numbers'] = update.message.text.split('\n')
+    return process_file(update, context)
+
 def process_file(update: Update, context: CallbackContext):
     try:
-        contacts_per_file = int(update.message.text)
+        contacts_per_file = int(update.message.text) if 'manual_numbers' not in context.user_data else int(context.user_data['contacts_per_file'])
         if contacts_per_file <= 0:
             raise ValueError
 
         msg = update.message.reply_text("⚙️ Processing... 0%")
 
-        with open(context.user_data['temp_file'].name, 'r') as f:
-            numbers = [re.sub(r'\D', '', line.strip()) for line in f if line.strip() and re.search(r'\d', line)]
+        if 'manual_numbers' in context.user_data:
+            numbers = [re.sub(r'\D', '', line.strip()) for line in context.user_data['manual_numbers'] if line.strip()]
+        else:
+            with open(context.user_data['temp_file'].name, 'r') as f:
+                numbers = [re.sub(r'\D', '', line.strip()) for line in f if line.strip()]
 
         if not numbers:
             msg.edit_text("❌ No valid numbers found!")
@@ -112,12 +132,8 @@ def process_file(update: Update, context: CallbackContext):
 
         for i in range(0, len(numbers), contacts_per_file):
             batch = numbers[i:i + contacts_per_file]
-            percent = int((i + len(batch)) / len(numbers) * 100)
-
-            try:
-                msg.edit_text(f"⚙️ Processing... {percent}%")
-            except:
-                pass
+            percent = min(100, int((i + len(batch)) / len(numbers) * 100))
+            msg.edit_text(f"⚙️ Processing... {percent}%")
 
             with tempfile.NamedTemporaryFile(delete=False, suffix='.vcf') as vcf_file:
                 for j, num in enumerate(batch):
@@ -145,28 +161,12 @@ def process_file(update: Update, context: CallbackContext):
     finally:
         if 'temp_file' in context.user_data:
             os.unlink(context.user_data['temp_file'].name)
-
     return ConversationHandler.END
 
-def add_user(update: Update, context: CallbackContext):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    try:
-        user_id = int(context.args[0])
-        ALLOWED_USERS.add(user_id)
-        update.message.reply_text("✅ User added successfully!")
-    except:
-        update.message.reply_text("❌ Invalid user ID.")
-
-def remove_user(update: Update, context: CallbackContext):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    try:
-        user_id = int(context.args[0])
-        ALLOWED_USERS.discard(user_id)
-        update.message.reply_text("✅ User removed successfully!")
-    except:
-        update.message.reply_text("❌ Invalid user ID.")
+def store_contacts_per_file(update: Update, context: CallbackContext):
+    context.user_data['contacts_per_file'] = update.message.text
+    update.message.reply_text("📥 Paste your numbers (one per line):")
+    return GET_NUMBERS
 
 def main():
     try:
@@ -174,11 +174,9 @@ def main():
         updater = Updater(TOKEN, use_context=True)
         dp = updater.dispatcher
 
-        dp.add_handler(CommandHandler("start", start))
-        dp.add_handler(CommandHandler("adduser", add_user))
-        dp.add_handler(CommandHandler("removeuser", remove_user))
+        dp.add_error_handler(lambda u, c: None)
 
-        conv_handler = ConversationHandler(
+        file_conv = ConversationHandler(
             entry_points=[MessageHandler(Filters.document, handle_file)],
             states={
                 GET_BASE_NAME: [MessageHandler(Filters.text, get_base_name)],
@@ -188,13 +186,29 @@ def main():
             fallbacks=[]
         )
 
-        dp.add_handler(conv_handler)
+        manual_conv = ConversationHandler(
+            entry_points=[CommandHandler("manual", manual)],
+            states={
+                GET_BASE_NAME: [MessageHandler(Filters.text, get_base_name)],
+                GET_FILE_NAME: [MessageHandler(Filters.text, get_file_name)],
+                GET_CONTACTS_PER_FILE: [MessageHandler(Filters.text, store_contacts_per_file)],
+                GET_NUMBERS: [MessageHandler(Filters.text, get_manual_numbers)]
+            },
+            fallbacks=[]
+        )
 
+        dp.add_handler(file_conv)
+        dp.add_handler(manual_conv)
+        dp.add_handler(CommandHandler("start", start))
+
+        print("🤖 Bot starting...")
         updater.start_polling(drop_pending_updates=True)
+        print("✅ Bot is now running!")
         updater.idle()
 
     except Exception as e:
-        print(f"❌ Error: {str(e)}")
+        print(f"❌ Failed to start: {str(e)}")
+        print("Please check your configurations!")
 
 if __name__ == '__main__':
     main()
