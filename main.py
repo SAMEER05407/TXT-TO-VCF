@@ -38,9 +38,7 @@ if not re.match(r'^\d+:[\w-]+$', TOKEN):
 if not isinstance(ADMIN_ID, int) or ADMIN_ID < 1:
     raise ValueError("Invalid ADMIN_ID! Get your ID from @userinfobot")
 
-GET_BASE_NAME, GET_FILE_NAME, GET_CONTACTS_PER_FILE, GET_NUMBERS = range(4)
-
-user_states = {}
+GET_BASE_NAME, GET_FILE_NAME, GET_CONTACTS_PER_FILE, GET_MANUAL_NUMBER = range(4)
 
 def send_typing(action, update, context):
     context.bot.send_chat_action(chat_id=update.effective_chat.id, action=action)
@@ -58,13 +56,12 @@ def start(update: Update, context: CallbackContext):
         send_typing("typing", update, context)
         update.message.reply_text("⛔ Access Denied! Contact admin")
         return
-
     send_typing("typing", update, context)
     update.message.reply_text(
         "✨ *Ultimate TXT-to-VCF Converter* ✨\n\n"
         "📁 Send your TXT file to begin\n"
-        "✏️ Or use /manual to paste numbers\n"
-        "⚡ Auto numbering: C1→C2, twitter11→twitter12",
+        "⚡ Auto numbering: C1→C2, twitter11→twitter12\n"
+        "✍️ Or use /manual to paste numbers manually",
         parse_mode="Markdown"
     )
 
@@ -87,41 +84,29 @@ def handle_file(update: Update, context: CallbackContext):
     update.message.reply_text("ENTER BASE NAME:")
     return GET_BASE_NAME
 
-def manual(update: Update, context: CallbackContext):
-    if not is_allowed(update.effective_user.id):
-        update.message.reply_text("🔒 Unauthorized!")
-        return
-    context.user_data['manual'] = True
-    update.message.reply_text("ENTER BASE NAME:")
-    return GET_BASE_NAME
-
 def get_base_name(update: Update, context: CallbackContext):
     context.user_data['base_name'] = update.message.text
+    send_typing("typing", update, context)
     update.message.reply_text("ENTER BASE FILE NAME:")
     return GET_FILE_NAME
 
 def get_file_name(update: Update, context: CallbackContext):
     context.user_data['file_name'] = update.message.text
+    send_typing("typing", update, context)
     update.message.reply_text("🔢 Contacts per File (e.g., 50):")
     return GET_CONTACTS_PER_FILE
 
-def get_manual_numbers(update: Update, context: CallbackContext):
-    context.user_data['manual_numbers'] = update.message.text.split('\n')
-    return process_file(update, context)
-
 def process_file(update: Update, context: CallbackContext):
     try:
-        contacts_per_file = int(update.message.text) if 'manual_numbers' not in context.user_data else int(context.user_data['contacts_per_file'])
+        contacts_per_file = int(update.message.text)
         if contacts_per_file <= 0:
             raise ValueError
 
+        last_percent = -1
         msg = update.message.reply_text("⚙️ Processing... 0%")
 
-        if 'manual_numbers' in context.user_data:
-            numbers = [re.sub(r'\D', '', line.strip()) for line in context.user_data['manual_numbers'] if line.strip()]
-        else:
-            with open(context.user_data['temp_file'].name, 'r') as f:
-                numbers = [re.sub(r'\D', '', line.strip()) for line in f if line.strip()]
+        with open(context.user_data['temp_file'].name, 'r') as f:
+            numbers = [re.sub(r'\D', '', line.strip()) for line in f if line.strip() and re.search(r'\d+', line.strip())]
 
         if not numbers:
             msg.edit_text("❌ No valid numbers found!")
@@ -132,8 +117,14 @@ def process_file(update: Update, context: CallbackContext):
 
         for i in range(0, len(numbers), contacts_per_file):
             batch = numbers[i:i + contacts_per_file]
-            percent = min(100, int((i + len(batch)) / len(numbers) * 100))
-            msg.edit_text(f"⚙️ Processing... {percent}%")
+            current_percent = min(100, int((i + len(batch)) / len(numbers) * 100))
+
+            if current_percent != last_percent:
+                try:
+                    msg.edit_text(f"⚙️ Processing... {current_percent}%")
+                    last_percent = current_percent
+                except:
+                    pass
 
             with tempfile.NamedTemporaryFile(delete=False, suffix='.vcf') as vcf_file:
                 for j, num in enumerate(batch):
@@ -161,12 +152,113 @@ def process_file(update: Update, context: CallbackContext):
     finally:
         if 'temp_file' in context.user_data:
             os.unlink(context.user_data['temp_file'].name)
+
     return ConversationHandler.END
 
-def store_contacts_per_file(update: Update, context: CallbackContext):
-    context.user_data['contacts_per_file'] = update.message.text
-    update.message.reply_text("📥 Paste your numbers (one per line):")
-    return GET_NUMBERS
+def manual(update: Update, context: CallbackContext):
+    if not is_allowed(update.effective_user.id):
+        update.message.reply_text("⛔ Unauthorized!")
+        return
+    context.user_data['manual'] = True
+    update.message.reply_text("ENTER BASE NAME:")
+    return GET_BASE_NAME
+
+def get_manual_numbers(update: Update, context: CallbackContext):
+    try:
+        raw = update.message.text
+        numbers = [re.sub(r'\D', '', line.strip()) for line in raw.split('\n') if line.strip() and re.search(r'\d+', line.strip())]
+        if not numbers:
+            update.message.reply_text("❌ No valid numbers found!")
+            return ConversationHandler.END
+
+        context.user_data['numbers'] = numbers
+        send_typing("typing", update, context)
+        update.message.reply_text("ENTER BASE FILE NAME:")
+        return GET_FILE_NAME
+    except:
+        update.message.reply_text("❌ Something went wrong!")
+        return ConversationHandler.END
+
+def process_manual_file(update: Update, context: CallbackContext):
+    try:
+        context.user_data['file_name'] = update.message.text
+        send_typing("typing", update, context)
+        update.message.reply_text("🔢 Contacts per File (e.g., 50):")
+        return GET_CONTACTS_PER_FILE
+    except:
+        update.message.reply_text("❌ Error")
+        return ConversationHandler.END
+
+def process_manual(update: Update, context: CallbackContext):
+    try:
+        contacts_per_file = int(update.message.text)
+        if contacts_per_file <= 0:
+            raise ValueError
+
+        base_prefix, start_num = extract_base_and_number(context.user_data['base_name'])
+        file_prefix, file_start_num = extract_base_and_number(context.user_data['file_name'])
+
+        numbers = context.user_data['numbers']
+        last_percent = -1
+        msg = update.message.reply_text("⚙️ Processing... 0%")
+
+        for i in range(0, len(numbers), contacts_per_file):
+            batch = numbers[i:i + contacts_per_file]
+            current_percent = min(100, int((i + len(batch)) / len(numbers) * 100))
+            if current_percent != last_percent:
+                try:
+                    msg.edit_text(f"⚙️ Processing... {current_percent}%")
+                    last_percent = current_percent
+                except:
+                    pass
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.vcf') as vcf_file:
+                for j, num in enumerate(batch):
+                    contact_num = start_num + i + j
+                    vcf_file.write(
+                        f"BEGIN:VCARD\nVERSION:3.0\nFN:{base_prefix}{contact_num}\nTEL:{num}\nEND:VCARD\n".encode()
+                    )
+                vcf_file.flush()
+
+                with open(vcf_file.name, 'rb') as f:
+                    update.message.reply_document(
+                        document=f,
+                        filename=f"{file_prefix}{file_start_num + (i//contacts_per_file)}.vcf",
+                        caption=f"✅ {len(batch)} contacts ({base_prefix}{start_num + i}-{base_prefix}{start_num + i + len(batch) - 1})"
+                    )
+            os.unlink(vcf_file.name)
+
+        msg.edit_text(f"🎉 Converted {len(numbers)} contacts!")
+
+    except ValueError:
+        update.message.reply_text("❌ Enter valid number > 0!")
+        return GET_CONTACTS_PER_FILE
+    except Exception as e:
+        update.message.reply_text(f"❌ Error: {str(e)}")
+    return ConversationHandler.END
+
+def add_user(update: Update, context: CallbackContext):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    try:
+        new_id = int(context.args[0])
+        ALLOWED_USERS.add(new_id)
+        update.message.reply_text(f"✅ User {new_id} added successfully!")
+    except:
+        update.message.reply_text("❌ Invalid usage. Use: /adduser <user_id>")
+
+def remove_user(update: Update, context: CallbackContext):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    try:
+        remove_id = int(context.args[0])
+        if remove_id == ADMIN_ID:
+            update.message.reply_text("❌ Can't remove the admin!")
+            return
+        ALLOWED_USERS.discard(remove_id)
+        update.message.reply_text(f"✅ User {remove_id} removed successfully!")
+    except:
+        update.message.reply_text("❌ Invalid usage. Use: /removeuser <user_id>")
 
 def main():
     try:
@@ -179,9 +271,9 @@ def main():
         file_conv = ConversationHandler(
             entry_points=[MessageHandler(Filters.document, handle_file)],
             states={
-                GET_BASE_NAME: [MessageHandler(Filters.text, get_base_name)],
-                GET_FILE_NAME: [MessageHandler(Filters.text, get_file_name)],
-                GET_CONTACTS_PER_FILE: [MessageHandler(Filters.text, process_file)]
+                GET_BASE_NAME: [MessageHandler(Filters.text & ~Filters.command, get_base_name)],
+                GET_FILE_NAME: [MessageHandler(Filters.text & ~Filters.command, get_file_name)],
+                GET_CONTACTS_PER_FILE: [MessageHandler(Filters.text & ~Filters.command, process_file)]
             },
             fallbacks=[]
         )
@@ -189,10 +281,9 @@ def main():
         manual_conv = ConversationHandler(
             entry_points=[CommandHandler("manual", manual)],
             states={
-                GET_BASE_NAME: [MessageHandler(Filters.text, get_base_name)],
-                GET_FILE_NAME: [MessageHandler(Filters.text, get_file_name)],
-                GET_CONTACTS_PER_FILE: [MessageHandler(Filters.text, store_contacts_per_file)],
-                GET_NUMBERS: [MessageHandler(Filters.text, get_manual_numbers)]
+                GET_BASE_NAME: [MessageHandler(Filters.text & ~Filters.command, get_base_name)],
+                GET_FILE_NAME: [MessageHandler(Filters.text & ~Filters.command, process_manual_file)],
+                GET_CONTACTS_PER_FILE: [MessageHandler(Filters.text & ~Filters.command, process_manual)]
             },
             fallbacks=[]
         )
@@ -200,6 +291,8 @@ def main():
         dp.add_handler(file_conv)
         dp.add_handler(manual_conv)
         dp.add_handler(CommandHandler("start", start))
+        dp.add_handler(CommandHandler("adduser", add_user, pass_args=True))
+        dp.add_handler(CommandHandler("removeuser", remove_user, pass_args=True))
 
         print("🤖 Bot starting...")
         updater.start_polling(drop_pending_updates=True)
