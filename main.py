@@ -29,12 +29,14 @@ def keep_alive():
     t.start()
 
 # ===== CONFIGURATION =====
-TOKEN = "7210389776:AAEWbAsgCtWQ9GOPKqAhIo7HvzRYajPCqyg"
-ADMIN_ID = 1485166650
+TOKEN = "7210389776:AAEWbAsgCtWQ9GOPKqAhIo7HvzRYajPCqyg"  # Your bot token
+ADMIN_ID = 1485166650                                   # Your admin ID
 ALLOWED_USERS = {ADMIN_ID}
 
-GET_BASE_NAME, GET_FILE_NAME, GET_CONTACTS_PER_FILE, MANUAL_NUMBER_ENTRY = range(4)
+# Conversation states
+GET_BASE_NAME, GET_FILE_NAME, GET_CONTACTS_PER_FILE, GET_NUMBERS = range(4)
 
+# ==== Helpers ====
 def send_typing(action, update, context):
     context.bot.send_chat_action(chat_id=update.effective_chat.id, action=action)
     time.sleep(0.5)
@@ -46,6 +48,7 @@ def extract_base_and_number(name):
 def is_allowed(user_id):
     return user_id in ALLOWED_USERS
 
+# ==== Handlers ====
 def start(update: Update, context: CallbackContext):
     if not is_allowed(update.effective_user.id):
         send_typing("typing", update, context)
@@ -56,7 +59,8 @@ def start(update: Update, context: CallbackContext):
     update.message.reply_text(
         "✨ *Ultimate TXT-to-VCF Converter* ✨\n\n"
         "📁 Send your TXT file to begin\n"
-        "✍️ Or use /manual to enter numbers manually",
+        "✍️ Or type /manual to enter numbers manually\n"
+        "⚡ Auto numbering: C1→C2, twitter11→twitter12",
         parse_mode="Markdown"
     )
 
@@ -72,6 +76,7 @@ def handle_file(update: Update, context: CallbackContext):
         update.message.reply_text("❌ Only TXT files accepted")
         return
 
+    context.user_data['manual_numbers'] = []
     context.user_data['temp_file'] = tempfile.NamedTemporaryFile(delete=False, suffix='.txt')
     file.get_file().download(context.user_data['temp_file'].name)
 
@@ -100,8 +105,8 @@ def process_file(update: Update, context: CallbackContext):
         last_percent = -1
         msg = update.message.reply_text("⚙️ Processing... 0%")
 
-        if 'numbers' in context.user_data:
-            numbers = context.user_data['numbers']
+        if context.user_data.get('manual_numbers'):
+            numbers = context.user_data['manual_numbers']
         else:
             with open(context.user_data['temp_file'].name, 'r') as f:
                 numbers = [re.sub(r'\D', '', line.strip()) for line in f if line.strip()]
@@ -116,7 +121,6 @@ def process_file(update: Update, context: CallbackContext):
         for i in range(0, len(numbers), contacts_per_file):
             batch = numbers[i:i + contacts_per_file]
             current_percent = min(100, int((i + len(batch)) / len(numbers) * 100))
-
             if current_percent != last_percent:
                 try:
                     msg.edit_text(f"⚙️ Processing... {current_percent}%")
@@ -154,29 +158,23 @@ def process_file(update: Update, context: CallbackContext):
     finally:
         if 'temp_file' in context.user_data:
             os.unlink(context.user_data['temp_file'].name)
-
     return ConversationHandler.END
 
-def start_manual_entry(update: Update, context: CallbackContext):
-    if not is_allowed(update.effective_user.id):
-        return update.message.reply_text("⛔ Unauthorized")
-
-    context.user_data['numbers'] = []
+def manual(update: Update, context: CallbackContext):
+    context.user_data['manual_numbers'] = []
     update.message.reply_text("✍️ Send numbers one by one. Type /done when finished.")
-    return MANUAL_NUMBER_ENTRY
+    return GET_NUMBERS
 
 def collect_numbers(update: Update, context: CallbackContext):
-    number = re.sub(r'\D', '', update.message.text.strip())
+    number = re.sub(r'\D', '', update.message.text)
     if number:
-        context.user_data['numbers'].append(number)
-        update.message.reply_text(f"✅ Added: {number}")
-    else:
-        update.message.reply_text("❌ Invalid number")
-    return MANUAL_NUMBER_ENTRY
+        context.user_data['manual_numbers'].append(number)
+    return GET_NUMBERS
 
-def manual_done(update: Update, context: CallbackContext):
-    if not context.user_data.get('numbers'):
-        return update.message.reply_text("⚠️ No numbers added yet")
+def done(update: Update, context: CallbackContext):
+    if not context.user_data.get('manual_numbers'):
+        update.message.reply_text("❌ No numbers added!")
+        return ConversationHandler.END
 
     update.message.reply_text("ENTER BASE NAME")
     return GET_BASE_NAME
@@ -187,9 +185,9 @@ def add_user(update: Update, context: CallbackContext):
     try:
         user_id = int(context.args[0])
         ALLOWED_USERS.add(user_id)
-        update.message.reply_text(f"✅ User {user_id} added.")
+        update.message.reply_text(f"✅ User {user_id} added")
     except:
-        update.message.reply_text("❌ Usage: /adduser <id>")
+        update.message.reply_text("❌ Invalid usage")
 
 def remove_user(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
@@ -197,9 +195,9 @@ def remove_user(update: Update, context: CallbackContext):
     try:
         user_id = int(context.args[0])
         ALLOWED_USERS.discard(user_id)
-        update.message.reply_text(f"❌ User {user_id} removed.")
+        update.message.reply_text(f"✅ User {user_id} removed")
     except:
-        update.message.reply_text("❌ Usage: /removeuser <id>")
+        update.message.reply_text("❌ Invalid usage")
 
 def main():
     keep_alive()
@@ -207,24 +205,33 @@ def main():
     dp = updater.dispatcher
 
     file_conv = ConversationHandler(
-        entry_points=[MessageHandler(Filters.document, handle_file), CommandHandler("manual", start_manual_entry)],
+        entry_points=[MessageHandler(Filters.document, handle_file)],
         states={
             GET_BASE_NAME: [MessageHandler(Filters.text, get_base_name)],
             GET_FILE_NAME: [MessageHandler(Filters.text, get_file_name)],
-            GET_CONTACTS_PER_FILE: [MessageHandler(Filters.text, process_file)],
-            MANUAL_NUMBER_ENTRY: [MessageHandler(Filters.text & ~Filters.command, collect_numbers)]
+            GET_CONTACTS_PER_FILE: [MessageHandler(Filters.text, process_file)]
         },
-        fallbacks=[CommandHandler("done", manual_done)]
+        fallbacks=[]
+    )
+
+    manual_conv = ConversationHandler(
+        entry_points=[CommandHandler("manual", manual)],
+        states={
+            GET_NUMBERS: [MessageHandler(Filters.text & ~Filters.command, collect_numbers)],
+            GET_BASE_NAME: [MessageHandler(Filters.text, get_base_name)],
+            GET_FILE_NAME: [MessageHandler(Filters.text, get_file_name)],
+            GET_CONTACTS_PER_FILE: [MessageHandler(Filters.text, process_file)]
+        },
+        fallbacks=[CommandHandler("done", done)]
     )
 
     dp.add_handler(file_conv)
+    dp.add_handler(manual_conv)
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("adduser", add_user))
     dp.add_handler(CommandHandler("removeuser", remove_user))
 
-    print("🤖 Bot starting...")
     updater.start_polling(drop_pending_updates=True)
-    print("✅ Bot is now running!")
     updater.idle()
 
 if __name__ == '__main__':
