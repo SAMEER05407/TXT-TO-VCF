@@ -1,20 +1,25 @@
+# START of main.py
 import os
 import re
 import tempfile
 import time
+import logging
 from flask import Flask
 from threading import Thread
 from telegram import Update, InputFile
 from telegram.ext import (
-    Updater,
+    ApplicationBuilder,
     CommandHandler,
     MessageHandler,
-    Filters,
-    CallbackContext,
-    ConversationHandler
+    ConversationHandler,
+    ContextTypes,
+    filters
 )
 
-# === Web server to keep bot alive ===
+# Enable logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 app = Flask('')
 @app.route('/')
 def home():
@@ -24,7 +29,7 @@ def run():
 def keep_alive():
     Thread(target=run).start()
 
-# === Bot Configuration ===
+# === Bot Config ===
 TOKEN = "7210389776:AAEWbAsgCtWQ9GOPKqAhIo7HvzRYajPCqyg"
 ADMIN_ID = 1485166650
 ALLOWED_USERS_FILE = "allowed_users.txt"
@@ -45,66 +50,68 @@ ALLOWED_USERS = load_allowed_users()
 def is_allowed(user_id):
     return user_id == ADMIN_ID or user_id in ALLOWED_USERS
 
-def send_typing(action, update, context):
-    context.bot.send_chat_action(chat_id=update.effective_chat.id, action=action)
-    time.sleep(0.5)
+# === Start ===
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_allowed(user_id):
+        await update.message.reply_text("⛔ Access Denied! Contact admin.")
+        return
+    await update.message.reply_text("Welcome! Send a .txt file to start converting.")
+
+# === File Upload ===
+async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_allowed(user_id):
+        await update.message.reply_text("⛔ Access Denied.")
+        return ConversationHandler.END
+
+    file = update.message.document
+    if not file.file_name.lower().endswith(".txt"):
+        await update.message.reply_text("❌ Please upload a .txt file.")
+        return ConversationHandler.END
+
+    file_path = tempfile.NamedTemporaryFile(delete=False, suffix=".txt").name
+    await file.get_file().download_to_drive(file_path)
+    context.user_data["temp_file"] = file_path
+    await update.message.reply_text("🔤 Enter Base Name (e.g., twitter11):")
+    return GET_BASE_NAME
+
+async def get_base_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["base_name"] = update.message.text.strip()
+    await update.message.reply_text("📝 Enter File Prefix (e.g., batch1):")
+    return GET_FILE_NAME
+
+async def get_file_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["file_name"] = update.message.text.strip()
+    await update.message.reply_text("🔢 Contacts per file (e.g., 50):")
+    return GET_CONTACTS_PER_FILE
 
 def extract_base_and_number(name):
     match = re.search(r'^(.*?)(\d+)$', name)
     return (match.group(1), int(match.group(2))) if match else (name, 1)
 
-def start(update: Update, context: CallbackContext):
-    if not is_allowed(update.effective_user.id):
-        send_typing("typing", update, context)
-        update.message.reply_text("⛔ Access Denied! Contact admin.")
-        return
-    update.message.reply_text("Welcome! Send a .txt file to start converting.")
-
-def handle_file(update: Update, context: CallbackContext):
-    if not is_allowed(update.effective_user.id):
-        update.message.reply_text("⛔ Access Denied.")
-        return
-    file = update.message.document
-    if not file.file_name.lower().endswith(".txt"):
-        update.message.reply_text("❌ Please upload a .txt file.")
-        return
-    context.user_data["temp_file"] = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
-    file.get_file().download(custom_path=context.user_data["temp_file"].name)
-    update.message.reply_text("🔤 Enter Base Name (e.g. twitter11):")
-    return GET_BASE_NAME
-
-def get_base_name(update: Update, context: CallbackContext):
-    context.user_data["base_name"] = update.message.text
-    update.message.reply_text("📝 Enter File Prefix (e.g. batch1):")
-    return GET_FILE_NAME
-
-def get_file_name(update: Update, context: CallbackContext):
-    context.user_data["file_name"] = update.message.text
-    update.message.reply_text("🔢 Contacts per file (e.g. 50):")
-    return GET_CONTACTS_PER_FILE
-
-def process_file(update: Update, context: CallbackContext):
+async def process_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        count = int(update.message.text)
+        count = int(update.message.text.strip())
         if count <= 0:
-            raise ValueError("Invalid count.")
-        msg = update.message.reply_text("⚙️ Processing... 0%")
-        with open(context.user_data["temp_file"].name, "r") as f:
+            raise ValueError("Invalid number.")
+
+        msg = await update.message.reply_text("⚙️ Processing...")
+
+        with open(context.user_data["temp_file"], "r") as f:
             lines = f.readlines()
+
         numbers = [line.strip() for line in lines if line.strip().isdigit()]
         if not numbers:
-            msg.edit_text("❌ No valid numbers found!")
+            await msg.edit_text("❌ No valid numbers found!")
             return ConversationHandler.END
 
         base_prefix, start_num = extract_base_and_number(context.user_data["base_name"])
         file_prefix, file_start = extract_base_and_number(context.user_data["file_name"])
         total = len(numbers)
+
         for i in range(0, total, count):
             batch = numbers[i:i+count]
-            percent = int(((i+count)/total)*100)
-            try:
-                msg.edit_text(f"⚙️ Processing... {min(percent, 100)}%")
-            except: pass
             with tempfile.NamedTemporaryFile(delete=False, suffix=".vcf") as vcf_file:
                 for j, num in enumerate(batch):
                     contact_num = start_num + i + j
@@ -112,63 +119,69 @@ def process_file(update: Update, context: CallbackContext):
                         f"BEGIN:VCARD\nVERSION:3.0\nFN:{base_prefix}{contact_num}\nTEL:{num}\nEND:VCARD\n".encode()
                     )
                 vcf_file.flush()
-                with open(vcf_file.name, "rb") as f:
-                    update.message.reply_document(
-                        document=f,
-                        filename=f"{file_prefix}{file_start + (i//count)}.vcf",
-                        caption=f"✅ {len(batch)} contacts done."
-                    )
-            os.unlink(vcf_file.name)
-        msg.edit_text("🎉 Done! All VCFs sent.")
-    except:
-        update.message.reply_text("❌ Error processing file.")
+                await update.message.reply_document(
+                    document=InputFile(vcf_file.name),
+                    filename=f"{file_prefix}{file_start + (i//count)}.vcf",
+                    caption=f"✅ {len(batch)} contacts"
+                )
+                os.unlink(vcf_file.name)
+
+        await msg.edit_text("✅ All VCF files sent!")
+    except Exception as e:
+        logger.error("Processing error: %s", e)
+        await update.message.reply_text("❌ Error processing file.")
     finally:
         if "temp_file" in context.user_data:
-            os.unlink(context.user_data["temp_file"].name)
+            os.unlink(context.user_data["temp_file"])
     return ConversationHandler.END
 
-def add_user(update: Update, context: CallbackContext):
+# === Admin ===
+async def add_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        return update.message.reply_text("⛔ Only admin can use this command.")
+        return await update.message.reply_text("⛔ Only admin can use this command.")
     try:
         uid = int(context.args[0])
         ALLOWED_USERS.add(uid)
         save_allowed_users(ALLOWED_USERS)
-        update.message.reply_text(f"✅ User {uid} added.")
+        await update.message.reply_text(f"✅ User {uid} added.")
     except:
-        update.message.reply_text("❌ Invalid user ID.")
+        await update.message.reply_text("❌ Invalid ID.")
 
-def remove_user(update: Update, context: CallbackContext):
+async def remove_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        return update.message.reply_text("⛔ Only admin can use this command.")
+        return await update.message.reply_text("⛔ Only admin can use this command.")
     try:
         uid = int(context.args[0])
         ALLOWED_USERS.discard(uid)
         save_allowed_users(ALLOWED_USERS)
-        update.message.reply_text(f"✅ User {uid} removed.")
+        await update.message.reply_text(f"✅ User {uid} removed.")
     except:
-        update.message.reply_text("❌ Invalid user ID.")
+        await update.message.reply_text("❌ Invalid ID.")
 
-def main():
+# === Main ===
+async def main():
     keep_alive()
-    updater = Updater(TOKEN, use_context=True)
-    dp = updater.dispatcher
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("adduser", add_user))
-    dp.add_handler(CommandHandler("removeuser", remove_user))
-    file_handler = ConversationHandler(
-        entry_points=[MessageHandler(Filters.document, handle_file)],
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("adduser", add_user))
+    app.add_handler(CommandHandler("removeuser", remove_user))
+
+    conv_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Document.ALL, handle_file)],
         states={
-            GET_BASE_NAME: [MessageHandler(Filters.text, get_base_name)],
-            GET_FILE_NAME: [MessageHandler(Filters.text, get_file_name)],
-            GET_CONTACTS_PER_FILE: [MessageHandler(Filters.text, process_file)],
+            GET_BASE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_base_name)],
+            GET_FILE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_file_name)],
+            GET_CONTACTS_PER_FILE: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_file)],
         },
-        fallbacks=[]
+        fallbacks=[],
     )
-    dp.add_handler(file_handler)
-    updater.start_polling()
+    app.add_handler(conv_handler)
+
     print("✅ Bot is running.")
-    updater.idle()
+    await app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
+# END of main.py
