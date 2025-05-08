@@ -1,4 +1,3 @@
-
 import os
 import re
 import tempfile
@@ -6,6 +5,41 @@ import time
 from flask import Flask
 from threading import Thread
 
+from telegram import Update, InputFile
+from telegram.ext import (
+    Updater,
+    CommandHandler,
+    MessageHandler,
+    Filters,
+    CallbackContext,
+    ConversationHandler
+)
+
+# ===== CONFIGURATION =====
+TOKEN = "7210389776:AAEWbAsgCtWQ9GOPKqAhIo7HvzRYajPCqyg"
+ADMIN_ID = 1485166650
+ALLOWED_USERS_FILE = "allowed_users.txt"
+
+# Load and Save User Access
+def load_allowed_users():
+    if os.path.exists(ALLOWED_USERS_FILE):
+        with open(ALLOWED_USERS_FILE, "r") as f:
+            return set(map(int, f.read().splitlines()))
+    return set()
+
+def save_allowed_users(users):
+    with open(ALLOWED_USERS_FILE, "w") as f:
+        f.write("\n".join(map(str, users)))
+
+ALLOWED_USERS = load_allowed_users()
+
+# Validate credentials
+if not re.match(r'^\d+:[\w-]+$', TOKEN):
+    raise ValueError("Invalid bot token!")
+if not isinstance(ADMIN_ID, int) or ADMIN_ID < 1:
+    raise ValueError("Invalid ADMIN_ID!")
+
+# Flask Web Server
 app = Flask('')
 
 @app.route('/')
@@ -19,40 +53,14 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
-from telegram import Update, InputFile
-from telegram.ext import (
-    Updater,
-    CommandHandler,
-    MessageHandler,
-    Filters,
-    CallbackContext,
-    ConversationHandler
-)
-
-# ===== CONFIGURATION =====
-TOKEN = "7210389776:AAEWbAsgCtWQ9GOPKqAhIo7HvzRYajPCqyg"  # Your bot token
-ADMIN_ID = 1485166650                                   # Your admin ID
-ALLOWED_USERS = {6827784861,8179320771,1485166650}
-
-# Validate credentials
-if not re.match(r'^\d+:[\w-]+$', TOKEN):
-    raise ValueError("Invalid bot token! Get new one from @BotFather")
-if not isinstance(ADMIN_ID, int) or ADMIN_ID < 1:
-    raise ValueError("Invalid ADMIN_ID! Get your ID from @userinfobot")
-
 # Conversation states
 GET_BASE_NAME, GET_FILE_NAME, GET_CONTACTS_PER_FILE = range(3)
 
 def send_typing(action, update, context):
-    """Show typing/busy animation"""
-    context.bot.send_chat_action(
-        chat_id=update.effective_chat.id, 
-        action=action
-    )
+    context.bot.send_chat_action(chat_id=update.effective_chat.id, action=action)
     time.sleep(0.5)
 
 def extract_base_and_number(name):
-    """Smart extraction for names like twitter11 → ('twitter', 11)"""
     match = re.search(r'^(.*?)(\d+)$', name)
     return (match.group(1), int(match.group(2))) if match else (name, 1)
 
@@ -64,7 +72,7 @@ def start(update: Update, context: CallbackContext):
         send_typing("typing", update, context)
         update.message.reply_text("⛔ Access Denied! Contact admin")
         return
-    
+
     send_typing("typing", update, context)
     update.message.reply_text(
         "✨ *Ultimate TXT-to-VCF Converter* ✨\n\n"
@@ -78,17 +86,16 @@ def handle_file(update: Update, context: CallbackContext):
         send_typing("typing", update, context)
         update.message.reply_text("🔒 Unauthorized!")
         return
-    
+
     file = update.message.document
     if not file.file_name.lower().endswith('.txt'):
         send_typing("typing", update, context)
         update.message.reply_text("❌ Only TXT files accepted")
         return
-    
-    # Store file
+
     context.user_data['temp_file'] = tempfile.NamedTemporaryFile(delete=False, suffix='.txt')
     file.get_file().download(context.user_data['temp_file'].name)
-    
+
     send_typing("typing", update, context)
     update.message.reply_text("🔤 Enter Base Name (e.g., twitter11):")
     return GET_BASE_NAME
@@ -111,11 +118,9 @@ def process_file(update: Update, context: CallbackContext):
         if contacts_per_file <= 0:
             raise ValueError
 
-        # Initialize progress
         last_percent = -1
         msg = update.message.reply_text("⚙️ Processing... 0%")
 
-        # Read numbers
         with open(context.user_data['temp_file'].name, 'r') as f:
             numbers = [re.sub(r'\D', '', line.strip()) for line in f if line.strip()]
         
@@ -123,16 +128,13 @@ def process_file(update: Update, context: CallbackContext):
             msg.edit_text("❌ No valid numbers found!")
             return ConversationHandler.END
 
-        # Extract numbering
         base_prefix, start_num = extract_base_and_number(context.user_data['base_name'])
         file_prefix, file_start_num = extract_base_and_number(context.user_data['file_name'])
 
-        # Process batches
         for i in range(0, len(numbers), contacts_per_file):
             batch = numbers[i:i + contacts_per_file]
             current_percent = min(100, int((i + len(batch)) / len(numbers) * 100))
-            
-            # Update progress only if changed
+
             if current_percent != last_percent:
                 try:
                     msg.edit_text(f"⚙️ Processing... {current_percent}%")
@@ -140,20 +142,14 @@ def process_file(update: Update, context: CallbackContext):
                 except:
                     pass
 
-            # Generate VCF
             with tempfile.NamedTemporaryFile(delete=False, suffix='.vcf') as vcf_file:
                 for j, num in enumerate(batch):
                     contact_num = start_num + i + j
                     vcf_file.write(
-                        f"BEGIN:VCARD\n"
-                        f"VERSION:3.0\n"
-                        f"FN:{base_prefix}{contact_num}\n"
-                        f"TEL:{num}\n"
-                        f"END:VCARD\n".encode()
+                        f"BEGIN:VCARD\nVERSION:3.0\nFN:{base_prefix}{contact_num}\nTEL:{num}\nEND:VCARD\n".encode()
                     )
                 vcf_file.flush()
-                
-                # Send file
+
                 with open(vcf_file.name, 'rb') as f:
                     update.message.reply_document(
                         document=f,
@@ -172,19 +168,36 @@ def process_file(update: Update, context: CallbackContext):
     finally:
         if 'temp_file' in context.user_data:
             os.unlink(context.user_data['temp_file'].name)
-    
+
     return ConversationHandler.END
 
+# ===== Admin-only: Add User Command =====
+def add_user(update: Update, context: CallbackContext):
+    if update.effective_user.id != ADMIN_ID:
+        update.message.reply_text("⛔ You are not authorized to use this command.")
+        return
+
+    if not context.args:
+        update.message.reply_text("⚠️ Usage: /adduser <user_id>")
+        return
+
+    try:
+        new_id = int(context.args[0])
+        ALLOWED_USERS.add(new_id)
+        save_allowed_users(ALLOWED_USERS)
+        update.message.reply_text(f"✅ User {new_id} has been granted access.")
+    except ValueError:
+        update.message.reply_text("❌ Invalid user ID.")
+
+# ========== Main ==========
 def main():
     try:
         keep_alive()
         updater = Updater(TOKEN, use_context=True)
         dp = updater.dispatcher
 
-        # Error handler
         dp.add_error_handler(lambda u, c: None)
 
-        # File processing flow
         file_conv = ConversationHandler(
             entry_points=[MessageHandler(Filters.document, handle_file)],
             states={
@@ -195,10 +208,9 @@ def main():
             fallbacks=[]
         )
         dp.add_handler(file_conv)
-
-        # Start command
         dp.add_handler(CommandHandler("start", start))
-        
+        dp.add_handler(CommandHandler("adduser", add_user))
+
         print("🤖 Bot starting...")
         updater.start_polling(drop_pending_updates=True)
         print("✅ Bot is now running!")
