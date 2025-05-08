@@ -55,7 +55,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(user_id):
         await update.message.reply_text("⛔ Access Denied! Contact admin.")
         return
-    await update.message.reply_text("Welcome to Contact Bot Your Ultimate Contact Converter Created by Sameer")
+    await update.message.reply_text("Welcome! Send a .txt file to start converting.")
 
 # === File Upload ===
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -72,17 +72,17 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_path = tempfile.NamedTemporaryFile(delete=False, suffix=".txt").name
     await file.get_file().download_to_drive(file_path)
     context.user_data["temp_file"] = file_path
-    await update.message.reply_text("ENTER THE BASE NAME 📱 (e.g., twitter11):")
+    await update.message.reply_text("🔤 Enter Base Name (e.g., twitter11):")
     return GET_BASE_NAME
 
 async def get_base_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["base_name"] = update.message.text.strip()
-    await update.message.reply_text("ENTER THE BASE FILE NAME 🗃️ (e.g., batch1):")
+    await update.message.reply_text("📝 Enter File Prefix (e.g., batch1):")
     return GET_FILE_NAME
 
 async def get_file_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["file_name"] = update.message.text.strip()
-    await update.message.reply_text("CONTECT IN PER FILE ♂️ (e.g., 50):")
+    await update.message.reply_text("🔢 Contacts per file (e.g., 50):")
     return GET_CONTACTS_PER_FILE
 
 def extract_base_and_number(name):
@@ -184,4 +184,3 @@ if __name__ == "__main__":
     import asyncio
     asyncio.run(main())
 # END of main.py
-
