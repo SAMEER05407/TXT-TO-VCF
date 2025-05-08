@@ -32,7 +32,7 @@ from telegram.ext import (
 # ===== CONFIGURATION =====
 TOKEN = "7210389776:AAEWbAsgCtWQ9GOPKqAhIo7HvzRYajPCqyg"  # Your bot token
 ADMIN_ID = 1485166650                                   # Your admin ID
-ALLOWED_USERS = {ADMIN_ID}
+ALLOWED_USERS = {6827784861}
 
 # Validate credentials
 if not re.match(r'^\d+:[\w-]+$', TOKEN):
