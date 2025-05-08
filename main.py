@@ -55,8 +55,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(user_id):
         await update.message.reply_text("⛔ Access Denied! Contact admin.")
         return
-    await update.message.reply_text("✨ Welcome to ContactX Bot Your Ultimate Contact Converter
-Created by Sameer")
+    await update.message.reply_text("Welcome to Contact Bot Your Ultimate Contact Converter Created by Sameer")
 
 # === File Upload ===
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
