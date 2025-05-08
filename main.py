@@ -1,4 +1,3 @@
-# START of main.py
 import os
 import re
 import tempfile
@@ -56,7 +55,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(user_id):
         await update.message.reply_text("⛔ Access Denied! Contact admin.")
         return
-    await update.message.reply_text("""✨ Welcome to ContactX Bot – Your Ultimate Contact Converter!
+    await update.message.reply_text("✨ Welcome to ContactX Bot – Your Ultimate Contact Converter!
 Created by Sameer | Secure. Fast. Powerful.
 
 ⚡ What I Do:
@@ -79,7 +78,7 @@ How to Use Me:
 • Instant & accurate conversion
 • Admin-only access control for privacy
 • Clean & simple UI for ease of use
-""")
+")
 
 # === File Upload ===
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -208,3 +207,4 @@ if __name__ == "__main__":
     import asyncio
     asyncio.run(main())
 # END of main.py
+
