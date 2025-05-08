@@ -2,139 +2,137 @@ import os
 import re
 import logging
 from telegram import Update, ReplyKeyboardRemove
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    ConversationHandler,
-    filters,
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 
-# === CONFIG ===
+# Bot Configurations
 TOKEN = "7210389776:AAEWbAsgCtWQ9GOPKqAhIo7HvzRYajPCqyg"
 ADMIN_ID = 1485166650
 ALLOWED_USERS_FILE = "allowed_users.txt"
-logging.basicConfig(level=logging.INFO)
 
-# === STATES ===
-ASK_BASE_NAME, PROCESS_FILE = range(2)
+# Logging
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# === UTILITIES ===
+# States
+ASK_BASENAME = 1
+user_sessions = {}
+
+# User Management
 def load_allowed_users():
     if os.path.exists(ALLOWED_USERS_FILE):
         with open(ALLOWED_USERS_FILE, "r") as f:
             return set(map(int, f.read().splitlines()))
-    return set()
+    return {ADMIN_ID}
 
 def save_allowed_users(users):
     with open(ALLOWED_USERS_FILE, "w") as f:
         f.write("\n".join(map(str, users)))
 
 ALLOWED_USERS = load_allowed_users()
-ALLOWED_USERS.add(ADMIN_ID)
-save_allowed_users(ALLOWED_USERS)
 
-def is_valid_number(line):
-    return line.strip().isdigit() and len(line.strip()) >= 6
-
-def txt_to_vcf(file_path, base_name):
-    with open(file_path, "r") as f:
-        lines = [line.strip() for line in f if is_valid_number(line)]
-
-    output_files = []
-    for idx, number in enumerate(lines, 1):
-        filename = f"{base_name} {idx}.vcf"
-        with open(filename, "w") as vcf:
-            vcf.write(f"BEGIN:VCARD\nVERSION:3.0\nFN:{base_name} {idx}\nTEL;TYPE=CELL:{number}\nEND:VCARD")
-        output_files.append(filename)
-    return output_files
-
-# === COMMANDS ===
+# Commands
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if user_id not in ALLOWED_USERS:
+    if user_id != ADMIN_ID and user_id not in ALLOWED_USERS:
         await update.message.reply_text("⛔ Access Denied! Contact admin.")
         return
-    await update.message.reply_text(
-        "👋 *Welcome to VCF Converter Bot!*\n\n"
-        "📄 Send me a TXT file containing phone numbers, and I’ll convert them into VCF format.\n"
-        "🔠 You’ll be asked for a base name for contacts.\n\n"
-        "➕ Use /adduser <id> to grant access\n"
-        "➖ Use /removeuser <id> to revoke access\n\n"
-        "*Enjoy seamless VCF generation!*",
-        parse_mode="Markdown"
-    )
+    welcome = """
+👋 *Welcome to TXT to VCF Converter Bot!*
+
+📁 *Upload your .txt file* with numbers (one per line)
+📝 *You will be asked to enter base name*
+📤 The bot will send you clean VCF file(s)
+
+✅ *Only valid numbers will be processed*
+⚙️ Created with love by @yourusername
+    """
+    await update.message.reply_markdown(welcome)
 
 async def add_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        return await update.message.reply_text("⛔ Only the admin can add users.")
+        return
     try:
         user_id = int(context.args[0])
         ALLOWED_USERS.add(user_id)
         save_allowed_users(ALLOWED_USERS)
-        await update.message.reply_text(f"✅ User {user_id} added successfully.")
+        await update.message.reply_text(f"✅ User {user_id} added!")
     except:
-        await update.message.reply_text("⚠️ Usage: /adduser <user_id>")
+        await update.message.reply_text("❌ Usage: /adduser <user_id>")
 
 async def remove_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        return await update.message.reply_text("⛔ Only the admin can remove users.")
+        return
     try:
         user_id = int(context.args[0])
         ALLOWED_USERS.discard(user_id)
         save_allowed_users(ALLOWED_USERS)
-        await update.message.reply_text(f"✅ User {user_id} removed successfully.")
+        await update.message.reply_text(f"✅ User {user_id} removed!")
     except:
-        await update.message.reply_text("⚠️ Usage: /removeuser <user_id>")
+        await update.message.reply_text("❌ Usage: /removeuser <user_id>")
 
-# === CONVERSION LOGIC ===
+# File Handling
 async def handle_txt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if user_id not in ALLOWED_USERS:
-        return await update.message.reply_text("⛔ Access Denied!")
-
-    if not update.message.document or not update.message.document.file_name.endswith(".txt"):
-        return await update.message.reply_text("⚠️ Please upload a valid TXT file.")
-
-    file = await update.message.document.get_file()
-    file_path = f"{user_id}_temp.txt"
+    if user_id != ADMIN_ID and user_id not in ALLOWED_USERS:
+        await update.message.reply_text("⛔ Access Denied!")
+        return
+    doc = update.message.document
+    if doc.mime_type != "text/plain":
+        await update.message.reply_text("❌ Please send a .txt file only.")
+        return
+    file = await doc.get_file()
+    file_path = f"{user_id}.txt"
     await file.download_to_drive(file_path)
+    user_sessions[user_id] = file_path
+    await update.message.reply_text("🔤 Enter Base Name (e.g., TwitterContacts):")
+    return ASK_BASENAME
 
-    context.user_data["file_path"] = file_path
-    await update.message.reply_text("🔤 Enter Base Name (e.g., Twitter X):")
-    return ASK_BASE_NAME
-
-async def ask_base_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def convert_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
     base_name = update.message.text.strip()
-    file_path = context.user_data.get("file_path")
+    txt_path = user_sessions.get(user_id)
+    if not txt_path:
+        await update.message.reply_text("❌ No TXT file found. Please send a .txt file first.")
+        return ConversationHandler.END
 
-    if not base_name or not file_path:
-        return await update.message.reply_text("❌ Error! Please start again.")
-
-    await update.message.reply_text("⏳ Processing file...")
     try:
-        vcf_files = txt_to_vcf(file_path, base_name)
-        for vcf_file in vcf_files:
-            await context.bot.send_document(chat_id=update.effective_chat.id, document=open(vcf_file, "rb"))
-            os.remove(vcf_file)
-        os.remove(file_path)
+        with open(txt_path, "r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+
+        numbers = [re.sub(r'\D', '', line) for line in lines if re.sub(r'\D', '', line)]
+        chunk_size = 1000
+        total = len(numbers)
+        await update.message.reply_text(f"✅ Found {total} valid numbers. Creating VCF...")
+
+        for i in range(0, total, chunk_size):
+            chunk = numbers[i:i+chunk_size]
+            vcf_data = ""
+            for idx, number in enumerate(chunk):
+                vcf_data += f"BEGIN:VCARD\nVERSION:3.0\nFN:{base_name} {i + idx + 1}\nTEL;TYPE=CELL:{number}\nEND:VCARD\n"
+            filename = f"{base_name}_{(i // chunk_size) + 1}.vcf"
+            with open(filename, "w") as vcf_file:
+                vcf_file.write(vcf_data)
+            await update.message.reply_document(document=open(filename, "rb"))
+            os.remove(filename)
+
+        os.remove(txt_path)
+        user_sessions.pop(user_id, None)
     except Exception as e:
         await update.message.reply_text(f"❌ Error processing file: {e}")
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ Cancelled", reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text("❌ Operation cancelled.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
-# === MAIN ===
-if __name__ == "__main__":
+# Main App
+if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
 
     conv_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.Document.FILE_EXTENSION("txt"), handle_txt)],
-        states={ASK_BASE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_base_name)]},
-        fallbacks=[CommandHandler("cancel", cancel)],
+        entry_points=[MessageHandler(filters.Document.MIME_TYPE("text/plain"), handle_txt)],
+        states={ASK_BASENAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, convert_and_send)]},
+        fallbacks=[CommandHandler("cancel", cancel)]
     )
 
     app.add_handler(CommandHandler("start", start))
@@ -142,4 +140,5 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("removeuser", remove_user))
     app.add_handler(conv_handler)
 
+    print("Bot running...")
     app.run_polling()
