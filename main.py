@@ -29,7 +29,7 @@ def keep_alive():
     t.start()
 
 # ===== CONFIGURATION =====
-TOKEN = "7210389776:AAEWbAsgCtWQ9GOPKqAhIo7HvzRYajPCqyg"  # Your bot token
+TOKEN = "8194761447:AAEJwlU5jAFCglSfHtiyvy7WuSTqqoFVGqQ"  # Your bot token
 ADMIN_ID = 1485166650                                   # Your admin ID
 ALLOWED_USERS = {ADMIN_ID}
 
